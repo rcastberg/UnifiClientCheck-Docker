@@ -5,8 +5,28 @@ require_once(__DIR__ . '/Unifi-API-client/Client.php');
 require_once(__DIR__ . '/Unifi-API-client/config.php');
 require_once(__DIR__ . '/../vendor/autoload.php');
 
+
+function getMacAddresses() {
+    $filePath = getenv('KNOWN_MACS_FILE') ?: '/config/macs.txt';
+    $macAddresses = [];
+
+    if (file_exists($filePath)) {
+        echo "Using MAC addresses from file: $filePath\n";
+        $fileContents = file_get_contents($filePath);
+        $macAddresses = array_map(function($line) {
+            return trim(preg_split('/[,\|]/', $line)[0]);
+        }, explode("\n", $fileContents));
+    } else {
+        echo "Using MAC addresses from environment variable.\n";
+        $macAddresses = explode(',', getenv('KNOWN_MACS') ?: '');
+    }
+    $macAddresses = array_map('trim', $macAddresses);
+    echo "Number of MAC addresses found: " . count($macAddresses) . "\n";
+    return $macAddresses;
+}
+  
 // Environment configuration
-$envKnownMacs = array_map('trim', explode(',', getenv('KNOWN_MACS') ?: ''));
+$envKnownMacs =  getMacAddresses();
 $checkInterval = getenv('CHECK_INTERVAL') ?: 60;
 $notificationService = getenv('NOTIFICATION_SERVICE') ?: 'Telegram';
 $alwaysNotify = filter_var(getenv('ALWAYS_NOTIFY') ?: False, FILTER_VALIDATE_BOOLEAN);
