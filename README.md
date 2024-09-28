@@ -64,6 +64,7 @@ Set these variables for proper configuration:
 * `REMEMBER_NEW_DEVICES`: **(Optional)** Set to true to store MAC addresses of devices seen on the network (excluding those in KNOWN_MACS). This ensures notifications are sent only once for new device connections and allows for persistent storage of the database across app or container resets. (Default: `true`)
 * `KNOWN_MACS`: **(Optional)** Comma-separated list of known MAC addresses. Or you can let the app run once and send you a one-time notification for everything on your network.
 * `CHECK_INTERVAL`: **(Optional)** Interval in seconds between checks (default: `60`).
+* `ALWAYS_NOTIFY_GUEST`: **(Optional)** Name of the guest network to match against (default: None). When device is on this network, always notify.
 
 ### Notification Service Selection
 * `NOTIFICATION_SERVICE`: **(Optional)** Set to `Telegram`, `Ntfy`, `Pushover`, or  `Slack`. (default: `Telegram`)

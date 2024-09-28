@@ -41,6 +41,8 @@ services:
       # Device removal settings
       REMOVE_OLD_DEVICES: ${REMOVE_OLD_DEVICES} #Remove devices that are no longer in Unifi client list  
       REMOVE_DELAY: ${REMOVE_DELAY} # How long after client disconnects to remove from known devices
+
+      # ALWAYS_NOTIFY_GUEST: ${ALWAYS_NOTIFY_GUEST} # When a device is on this netowrk, always notify
     volumes:
       - unifi_data:/usr/src/myapp
 

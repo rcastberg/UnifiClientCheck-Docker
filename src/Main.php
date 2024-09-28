@@ -98,6 +98,7 @@ while (true) {
                 echo "New device found. Sending a notification.\n";
                 $newDeviceFound = true;
             }
+            
             if ($alwaysNotifyGuest && strlen($alwaysNotifyGuest) > 0 && strpos(($client->{$networkProperty} ?? 'N/A'), $alwaysNotifyGuest) !== false) {
                     echo "Guest device found. Sending a notification.\n";
                     $NotifyGuest = true;
@@ -105,6 +106,7 @@ while (true) {
             else {
                 $NotifyGuest = false;
             }
+
             if ($alwaysNotify || $isNewDevice || $NotifyGuest) {
                 if ($teleportNotifications && isset($client->type) && $client->type == 'TELEPORT') {
                     // Format message for Teleport device
