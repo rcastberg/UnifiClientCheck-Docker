@@ -63,6 +63,7 @@ Set these variables for proper configuration:
 * `ALWAYS_NOTIFY`: **(Optional)** Set to true to enable constant notifications for devices not in the KNOWN_MACS list or in the REMEMBER_NEW_DEVICES list if REMEMBER_NEW_DEVICES is also set to true. Use with caution as it may result in frequent notifications. (Default: `false`)
 * `REMEMBER_NEW_DEVICES`: **(Optional)** Set to true to store MAC addresses of devices seen on the network (excluding those in KNOWN_MACS). This ensures notifications are sent only once for new device connections and allows for persistent storage of the database across app or container resets. (Default: `true`)
 * `KNOWN_MACS`: **(Optional)** Comma-separated list of known MAC addresses. Or you can let the app run once and send you a one-time notification for everything on your network.
+* `KNOWN_MACS_FILE`: **(Optional)** List of known MAC addresses. You can supply it as a list of MAC address, a regexp is used to find all MAC addresses in the file.
 * `CHECK_INTERVAL`: **(Optional)** Interval in seconds between checks (default: `60`).
 
 ### Notification Service Selection

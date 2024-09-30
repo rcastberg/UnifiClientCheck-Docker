@@ -13,9 +13,8 @@ function getMacAddresses() {
     if (file_exists($filePath)) {
         echo "Using MAC addresses from file: $filePath\n";
         $fileContents = file_get_contents($filePath);
-        $macAddresses = array_map(function($line) {
-            return trim(preg_split('/[,\|]/', $line)[0]);
-        }, explode("\n", $fileContents));
+        preg_match_all('/([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})/', $fileContents, $matches);
+        $macAddresses = array_map('trim', $matches[0]);
     } else {
         echo "Using MAC addresses from environment variable.\n";
         $macAddresses = explode(',', getenv('KNOWN_MACS') ?: '');
