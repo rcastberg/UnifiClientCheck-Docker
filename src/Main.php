@@ -23,7 +23,15 @@ function getMacAddresses() {
     echo "Number of MAC addresses found: " . count($macAddresses) . "\n";
     return $macAddresses;
 }
-  
+
+function isRandomMac($macAddress) {
+    // Remove any separators (e.g., colons or hyphens)
+    $macAddress = str_replace([':', '-'], '', $macAddress);
+
+    // Check if the second character of the MAC address is 2, 6, A, or E
+    return in_array(strtoupper($macAddress[1]), ['2', '6', 'A', 'E']);
+}
+
 // Environment configuration
 $envKnownMacs =  getMacAddresses();
 $checkInterval = getenv('CHECK_INTERVAL') ?: 60;
@@ -35,8 +43,8 @@ $removeOldDevices = filter_var(getenv('REMOVE_OLD_DEVICES') ?: False, FILTER_VAL
 $removeDelay = getenv('REMOVE_DELAY') ?: 0;
 
 // Validate critical environment configurations
-if (!in_array($notificationService, ['Telegram', 'Ntfy', 'Pushover', 'Slack'])) {
-    echo "Error: Invalid notification service specified. Please set NOTIFICATION_SERVICE to either 'Telegram', 'Nify', 'Pushover' or 'Slack'.\n";
+if (!in_array($notificationService, ['Telegram', 'Ntfy', 'Pushover', 'Slack', 'None'])) {
+    echo "Error: Invalid notification service specified. Please set NOTIFICATION_SERVICE to either 'Telegram', 'Nify', 'Pushover', 'Slack' or 'None'.\n";
     exit(1);
 }
 
@@ -96,21 +104,42 @@ while (true) {
                 $newDeviceFound = true;
             }
 
+            // Determine the source of the IP address
+            if (isset($client->ip)) {
+                $ip = $client->ip;
+                $ipSource = '';
+            } elseif (isset($client->last_ip)) {
+                $ip = $client->last_ip;
+                $ipSource = ' (last_ip)';
+            } elseif (isset($client->fixed_ip)) {
+                $ip = $client->fixed_ip;
+                $ipSource = ' (fixed_ip)';
+            } else {
+                $ip = 'Unassigned';
+                $ipSource = '';
+            }
             if ($alwaysNotify || $isNewDevice) {
                 if ($teleportNotifications && isset($client->type) && $client->type == 'TELEPORT') {
                     // Format message for Teleport device
                     $message = "Teleport device seen on network:\n";
                     $message .= "Name: " . ($client->name ?? 'Unknown') . "\n";
-                    $message .= "IP Address: " . $client->ip . "\n";
+                    $message .= "IP Address: " . $ip . $ipSource . "\n";
                     $message .= "ID: " . $client->id . "\n";
                 } else {
+                    print_r($client);
 					$networkProperty = $teleportNotifications ? 'network_name' : 'network';
                     // Format message for regular device
                     $message = "Device seen on network:\n";
                     $message .= "Device Name: " . ($client->name ?? 'Unknown') . "\n";
-                    $message .= "IP Address: `" . ($client->ip ?? 'Unassigned') . "`\n";
+                    $message .= "IP Address: `" . $ip . "`" . $ipSource . "\n";
                     $message .= "Hostname: " . ($client->hostname ?? 'N/A') . "\n";
-                    $message .= "MAC Address: `" . $client->mac . "`\n";
+                    if (isRandomMac($client->mac)) {
+                        $macAddressSuffix = " (random)";
+                    }
+                    else {
+                        $macAddressSuffix = "";
+                    }
+                    $message .= "MAC Address: `" . $client->mac . "`" . $macAddressSuffix . "\n";
                     $message .= "Connection Type: " . ($client->is_wired ? "Wired" : "Wireless") . "\n";
                     $message .= "Network: " . ($client->{$networkProperty} ?? 'N/A');
                 }
