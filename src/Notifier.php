@@ -60,6 +60,9 @@ class Notifier {
                             'text' => $message
                         ]
                     ]);
+                } elseif ($notificationService == 'None') {
+                    // Do nothing for None notifier
+                    echo $message . "\n";
                 }
                 
                 // Exit loop if the request is successful
