@@ -178,6 +178,19 @@ func (d *Database) AllowMac(mac string, until *time.Time) error {
 	return err
 }
 
+// ClearAll removes every stored MAC, returning how many rows were deleted.
+//
+// This discards allow decisions made from the Slack buttons, so it is only used
+// by an explicit "/reload fresh", where the caller has asked for KNOWN_MACS_FILE
+// to become the sole source of truth.
+func (d *Database) ClearAll() (int64, error) {
+	res, err := d.db.Exec("DELETE FROM known_macs")
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // PermanentMacs returns the permanently allowed MACs in sorted order, plus a
 // count of the live temporary allows it skipped.
 //

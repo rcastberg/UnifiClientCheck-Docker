@@ -91,7 +91,9 @@ const (
 // which owns the database and the known set. ResponseURL is where the outcome
 // should be reported.
 type Command struct {
-	Kind        CommandKind
+	Kind CommandKind
+	// Arg is the text typed after the command, e.g. "fresh" in "/reload fresh".
+	Arg         string
 	User        string
 	ResponseURL string
 }
@@ -266,7 +268,12 @@ func (c *Client) handleSlashCommand(payload interactionPayload, commands chan<- 
 		return
 	}
 
-	commands <- Command{Kind: kind, User: user, ResponseURL: payload.ResponseURL}
+	commands <- Command{
+		Kind:        kind,
+		Arg:         strings.TrimSpace(payload.Text),
+		User:        user,
+		ResponseURL: payload.ResponseURL,
+	}
 }
 
 // openConnection exchanges the app-level token for a single-use WebSocket URL.
@@ -467,6 +474,7 @@ type interactionPayload struct {
 
 	// slash_commands only
 	Command  string `json:"command"`
+	Text     string `json:"text"`
 	UserID   string `json:"user_id"`
 	UserName string `json:"user_name"`
 }

@@ -1,6 +1,9 @@
 package slack
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func commandClient() *Client {
 	return New(Config{
@@ -85,5 +88,51 @@ func TestSlashCommandOpenWhenNoAllowlist(t *testing.T) {
 		}
 	default:
 		t.Error("expected the command to be accepted when no allowlist is set")
+	}
+}
+
+// "/reload fresh" must carry its argument through, since that is what decides
+// whether stored allows are discarded.
+func TestSlashCommandCarriesArgument(t *testing.T) {
+	cases := map[string]string{
+		"fresh":     "fresh",
+		"  fresh  ": "fresh",
+		"":          "",
+	}
+
+	for text, want := range cases {
+		ch := make(chan Command, 1)
+		p := payloadFor("/reload", "U111")
+		p.Text = text
+		commandClient().handleSlashCommand(p, ch)
+
+		select {
+		case got := <-ch:
+			if got.Arg != want {
+				t.Errorf("text %q produced Arg %q, want %q", text, got.Arg, want)
+			}
+		default:
+			t.Errorf("text %q produced no command", text)
+		}
+	}
+}
+
+// The argument arrives in the slash_commands payload as "text".
+func TestSlashCommandPayloadDecoding(t *testing.T) {
+	raw := `{
+		"type": "slash_commands",
+		"command": "/reload",
+		"text": "fresh",
+		"user_id": "U111",
+		"user_name": "rene",
+		"response_url": "https://hooks.slack.com/commands/x"
+	}`
+
+	var p interactionPayload
+	if err := json.Unmarshal([]byte(raw), &p); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if p.Command != "/reload" || p.Text != "fresh" || p.UserID != "U111" {
+		t.Errorf("decoded %+v", p)
 	}
 }

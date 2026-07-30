@@ -262,11 +262,24 @@ just additions:
 | MAC added | Silent |
 | MAC removed | Alerts again |
 
-The one thing to be aware of: with `REMEMBER_NEW_DEVICES=false`, a device you have merely
-been alerted about is remembered *in memory only*. A reload discards that, so any device seen
-this session that is in neither the file nor the database will alert again — the same as if
-you had restarted the container. If you want a device to survive both, press **Allow
-permanently** (which writes to the database) or add it to `macs.txt`.
+The known set is rebuilt from the file **and** the database, so button decisions are kept:
+
+| Source | Kept by `/reload`? |
+|---|---|
+| `macs.txt` | ✅ re-read, additions and removals both apply |
+| **Allow permanently** (database) | ✅ kept |
+| **Allow 6h**, still live (database) | ✅ kept until it lapses |
+| Seen this session, no button pressed | ❌ dropped, alerts again |
+
+That last row is the one to watch: with `REMEMBER_NEW_DEVICES=false`, a device you have
+merely been alerted about is remembered *in memory only*, so a reload drops it exactly as a
+restart would. To make a device survive both, press **Allow permanently** or add it to
+`macs.txt`.
+
+**`/reload fresh`** additionally empties the database first, making `macs.txt` the sole source
+of truth. This **discards every allow made from the buttons**, so it is opt-in rather than the
+default — otherwise "Allow permanently" would quietly mean "until the next reload". If you
+want to keep those decisions, run `/writemacs` first and merge the export into `macs.txt`.
 
 #### Exporting the known devices
 
@@ -370,7 +383,7 @@ Used when `NOTIFICATION_SERVICE=SlackInteractive`. See [setup](#slack-interactiv
 * `SLACK_ALLOWED_USERS`: **(Optional but recommended)** Comma-separated Slack user IDs permitted to press the buttons. If unset, anyone who can see the alert may allow a device.
 * `SLACK_ALLOW_DURATIONS`: **(Optional)** Comma-separated temporary-allow options, using the same format as `REMOVE_DELAY` (`30s`, `6h`, `7d`, `2w`, or raw seconds). Capped at 4 so the permanent button still fits within Slack's five-element limit. (Default: `1h,6h,24h`)
 * `SLACK_EXPORT_COMMAND`: **(Optional)** Slash command that writes the known MACs to disk. A leading `/` is added if you omit it. Must match the command you registered in the Slack app. (Default: `/writemacs`)
-* `SLACK_RELOAD_COMMAND`: **(Optional)** Slash command that re-reads `KNOWN_MACS_FILE` and rebuilds the known set, as a restart would. Must match the command registered in the Slack app. (Default: `/reload`)
+* `SLACK_RELOAD_COMMAND`: **(Optional)** Slash command that re-reads `KNOWN_MACS_FILE` and rebuilds the known set, as a restart would. Adding the argument `fresh` also clears stored allows so the file becomes the sole source. Must match the command registered in the Slack app. (Default: `/reload`)
 * `MACS_EXPORT_FILE`: **(Optional)** Where the export command writes. The file is overwritten each time. (Default: `/data/known_macs.txt`)
 
 ### Gotify Settings

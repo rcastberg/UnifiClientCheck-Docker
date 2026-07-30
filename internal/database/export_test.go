@@ -71,3 +71,50 @@ func TestPermanentMacsEmpty(t *testing.T) {
 		t.Errorf("got %v / %d, want empty", macs, skipped)
 	}
 }
+
+// ClearAll backs "/reload fresh", where KNOWN_MACS_FILE becomes the sole source
+// of truth and stored button decisions are deliberately discarded.
+func TestClearAll(t *testing.T) {
+	db, _ := newTestDB(t)
+
+	if err := db.AllowMac("aa:bb:cc:dd:ee:ff", nil); err != nil {
+		t.Fatal(err)
+	}
+	live := time.Now().Add(time.Hour)
+	if err := db.AllowMac("11:11:11:11:11:11", &live); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpdateKnownMacs("22:22:22:22:22:22"); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := db.ClearAll()
+	if err != nil {
+		t.Fatalf("ClearAll: %v", err)
+	}
+	if n != 3 {
+		t.Errorf("ClearAll removed %d rows, want 3", n)
+	}
+
+	// Nothing stored remains, but a seed passed in is still honoured, which is
+	// what makes the file the sole source after a fresh reload.
+	got, err := db.LoadKnownMacs([]string{"99:99:99:99:99:99"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got, []string{"99:99:99:99:99:99"}) {
+		t.Errorf("after ClearAll got %v, want only the seed", got)
+	}
+}
+
+func TestClearAllOnEmptyDatabase(t *testing.T) {
+	db, _ := newTestDB(t)
+
+	n, err := db.ClearAll()
+	if err != nil {
+		t.Fatalf("ClearAll on empty database: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("ClearAll removed %d rows, want 0", n)
+	}
+}

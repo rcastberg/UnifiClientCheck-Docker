@@ -104,7 +104,31 @@ func applyDecision(d slack.Decision, db *database.Database, knownMacs map[string
 //
 // Devices seen earlier in this session that are in neither source are dropped
 // and will alert again, which is the same behaviour as restarting.
+//
+// With the "fresh" argument the database is emptied first, making the file the
+// sole source of truth. That discards every allow made from the buttons, so it
+// is deliberately opt-in rather than the default.
 func reloadKnownMacs(req slack.Command, cfg config.Config, db *database.Database, knownMacs *map[string]struct{}, sc *slack.Client) {
+	fresh := strings.EqualFold(req.Arg, "fresh")
+	if req.Arg != "" && !fresh {
+		sc.Reply(req.ResponseURL, fmt.Sprintf(
+			"Unknown option `%s`. Use `%s` to reload from the file and the database, "+
+				"or `%s fresh` to discard stored allows and use the file alone.",
+			req.Arg, cfg.SlackReloadCmd, cfg.SlackReloadCmd))
+		return
+	}
+
+	var discarded int64
+	if fresh {
+		n, err := db.ClearAll()
+		if err != nil {
+			log.Printf("Fresh reload requested by %s failed: %v", req.User, err)
+			sc.Reply(req.ResponseURL, fmt.Sprintf(":x: Could not clear stored allows: %v", err))
+			return
+		}
+		discarded = n
+	}
+
 	list, err := db.LoadKnownMacs(cfg.KnownMacsSeed())
 	if err != nil {
 		log.Printf("Reload requested by %s failed: %v", req.User, err)
@@ -118,6 +142,15 @@ func reloadKnownMacs(req slack.Command, cfg config.Config, db *database.Database
 	}
 	before := len(*knownMacs)
 	*knownMacs = rebuilt
+
+	if fresh {
+		log.Printf("Fresh reload by %s: discarded %d stored allow(s); %d known (was %d).",
+			req.User, discarded, len(rebuilt), before)
+		sc.Reply(req.ResponseURL, fmt.Sprintf(
+			":broom: Rebuilt from `%s` alone: %d device(s) known (was %d).\nDiscarded %d stored allow(s).",
+			cfg.KnownMacsFile, len(rebuilt), before, discarded))
+		return
+	}
 
 	log.Printf("Reloaded known devices: %d known (was %d), requested by %s.", len(rebuilt), before, req.User)
 	sc.Reply(req.ResponseURL, fmt.Sprintf(
