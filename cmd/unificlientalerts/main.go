@@ -37,12 +37,18 @@ func formatMessage(client *unifi.NetworkClient, teleport bool) string {
 		)
 	}
 
+	macSuffix := ""
+	if unifi.IsRandomMAC(client.Mac) {
+		macSuffix = " (random)"
+	}
+
 	return fmt.Sprintf(
-		"Device seen on network:\nDevice Name: %s\nIP Address: `%s`\nHostname: %s\nMAC Address: `%s`\nConnection Type: %s\nNetwork: %s",
+		"Device seen on network:\nDevice Name: %s\nIP Address: `%s`\nHostname: %s\nMAC Address: `%s`%s\nConnection Type: %s\nNetwork: %s",
 		client.DisplayName(),
 		unifi.StrOrDefault(client.IP, "Unassigned"),
 		unifi.StrOrDefault(client.Hostname, "N/A"),
 		unifi.StrOrDefault(client.Mac, "N/A"),
+		macSuffix,
 		unifi.WiredStr(client.IsWired),
 		unifi.StrOrDefault(client.NetworkName, "N/A"),
 	)

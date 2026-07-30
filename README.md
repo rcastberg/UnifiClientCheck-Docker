@@ -222,13 +222,15 @@ Set these variables for proper configuration:
 * `ALWAYS_NOTIFY`: **(Optional)** Set to `true` to send a notification on every check for all devices, not just new ones. Use with caution. (Default: `false`)
 * `REMEMBER_NEW_DEVICES`: **(Optional)** Set to `true` to store MAC addresses of newly seen devices so notifications are only sent once. (Default: `true`)
 * `KNOWN_MACS`: **(Optional)** Comma-separated list of known MAC addresses to suppress notifications for on first run.
+* `KNOWN_MACS_FILE`: **(Optional)** Path to a file of known MAC addresses, used in addition to `KNOWN_MACS`. Any MAC address in the file is picked up by pattern match, in either colon or hyphen form and in any case, so surrounding comments and device names are ignored. Useful when the list is too long to keep in an environment variable. A missing or unreadable file logs a warning and is treated as empty.
 * `FALLBACK_INTERVAL`: **(Optional)** Seconds between fallback polling checks. Set to `-1` to disable fallback polling entirely (WebSocket-only mode). (Default: `60`)
 * `WS_EVENT_DELAY`: **(Optional)** Seconds to wait after a WebSocket event (device connection) before querying the UniFi API to fetch device details. Allows the device to fully register in UniFi before querying. Increase if devices are slow to appear or get incomplete details. (Default: `3`)
 * `REQUIRE_IP`: **(Optional)** Set to `true` to hold notifications for new devices until they have been assigned an IP address. Note: WebSocket-triggered devices already wait for an IP with backoff polling; this setting primarily affects fallback polling checks. (Default: `false`)
 * `DATABASE_PATH`: **(Optional)** Path to the SQLite database file. (Default: `/data/knownMacs.db`)
 
 ### Notification Service Selection
-* `NOTIFICATION_SERVICE`: **(Optional)** Set to `Telegram`, `Ntfy`, `Pushover`, `Slack`, `Gotify`, `Discord`, `MQTT`, or `Webhook`. (Default: `Telegram`)
+* `NOTIFICATION_SERVICE`: **(Optional)** Set to `Telegram`, `Ntfy`, `Pushover`, `Slack`, `Gotify`, `Discord`, `MQTT`, `Webhook`, or `None`. (Default: `Telegram`)
+  * `None` writes each alert to the container log instead of delivering it anywhere, which is useful for dry runs and for seeding the known-device database without spamming yourself.
 
 ### Telegram Settings
 * `TELEGRAM_BOT_TOKEN`: **(Required if using Telegram)** Telegram bot token (example: `12345678:ABCDEFGHIJKLMNOPQRSTUVWXYZ`).

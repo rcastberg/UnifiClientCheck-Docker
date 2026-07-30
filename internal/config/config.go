@@ -3,6 +3,7 @@ package config
 import (
 	"log"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -36,6 +37,10 @@ func Load() Config {
 				cfg.KnownMacs = append(cfg.KnownMacs, trimmed)
 			}
 		}
+	}
+
+	if v := os.Getenv("KNOWN_MACS_FILE"); v != "" {
+		cfg.KnownMacs = append(cfg.KnownMacs, loadMacsFromFile(v)...)
 	}
 
 	if v := os.Getenv("NOTIFICATION_SERVICE"); v != "" {
@@ -74,6 +79,31 @@ func Load() Config {
 	cfg.Verbose = parseBool(os.Getenv("VERBOSE"), false)
 
 	return cfg
+}
+
+// macPattern matches a MAC address in either colon- or hyphen-separated form.
+var macPattern = regexp.MustCompile(`(?i)\b[0-9a-f]{2}(?:[:-][0-9a-f]{2}){5}\b`)
+
+// loadMacsFromFile scans path for MAC addresses and returns them normalised to
+// the lowercase, colon-separated form the UniFi API reports, so that entries
+// written with hyphens or in uppercase still match. Anything else in the file
+// is ignored, so comments and surrounding prose are safe.
+// A missing or unreadable file is logged and treated as empty rather than fatal.
+func loadMacsFromFile(path string) []string {
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		log.Printf("Warning: could not read KNOWN_MACS_FILE %q: %v", path, err)
+		return nil
+	}
+
+	matches := macPattern.FindAllString(string(contents), -1)
+	macs := make([]string, 0, len(matches))
+	for _, mac := range matches {
+		macs = append(macs, strings.ToLower(strings.ReplaceAll(mac, "-", ":")))
+	}
+
+	log.Printf("Loaded %d MAC addresses from %s", len(macs), path)
+	return macs
 }
 
 func parseBool(s string, defaultVal bool) bool {

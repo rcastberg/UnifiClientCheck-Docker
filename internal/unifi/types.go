@@ -1,5 +1,10 @@
 package unifi
 
+import (
+	"strings"
+	"unicode"
+)
+
 // NetworkClient represents a device connected to the UniFi network.
 type NetworkClient struct {
 	Mac              string `json:"mac"`
@@ -60,6 +65,22 @@ func LooksLikeMAC(s string) bool {
 		}
 	}
 	return true
+}
+
+// IsRandomMAC reports whether s is a locally administered ("randomised") MAC
+// address, as used by device-privacy features on modern phones and laptops.
+// These are identified by the U/L bit — bit 1 of the first octet — being set,
+// which makes the second hex digit one of 2, 6, A or E.
+func IsRandomMAC(s string) bool {
+	s = strings.NewReplacer(":", "", "-", "").Replace(s)
+	if len(s) < 2 {
+		return false
+	}
+	switch unicode.ToUpper(rune(s[1])) {
+	case '2', '6', 'A', 'E':
+		return true
+	}
+	return false
 }
 
 // StrOrDefault returns the string if non-empty, otherwise the default.

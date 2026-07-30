@@ -46,6 +46,7 @@ type Config struct {
 }
 
 // Notifier sends alerts via Telegram, Ntfy, Pushover, Slack, Gotify, Discord, MQTT, or Webhook.
+// The "None" service logs alerts without delivering them anywhere, for dry runs.
 type Notifier struct {
 	cfg      Config
 	mqttConn mqtt.Client
@@ -184,6 +185,9 @@ func (n *Notifier) sendOnce(message, service string) (int, error) {
 		return n.sendGotify(message)
 	case "Discord":
 		return n.sendDiscord(message)
+	case "None":
+		log.Print(message)
+		return 0, nil
 	default:
 		return 0, fmt.Errorf("unknown notification service: %s", service)
 	}
