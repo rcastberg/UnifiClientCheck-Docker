@@ -142,6 +142,7 @@ environment:
 - ✅ **IP Wait Support** — Hold notifications until device gets an IP address; polls with backoff after WS events
 - ✅ **Teleport Support** — Monitors Teleport (VPN) client connections and notifies by default
 - ✅ **Known MACs From File** — Load the known-device list from a file instead of an environment variable ([`KNOWN_MACS_FILE`](#general-settings))
+- ✅ **Export Known MACs** — Dump the known-device list back out to a file on demand ([`/writemacs`](#exporting-the-known-devices))
 - ✅ **Randomised MAC Tagging** — Flags locally administered ("private") MAC addresses in alerts
 
 ### Notification Services
@@ -211,9 +212,12 @@ and it works behind NAT.
 3. Under **OAuth & Permissions**, add the `chat:write` bot token scope.
 4. Under **Interactivity & Shortcuts**, toggle **Interactivity** on. Socket Mode delivers the
    events, so leave the Request URL empty.
-5. Click **Install to Workspace**, then copy the **Bot User OAuth Token** (starts with
+5. Under **Slash Commands**, click **Create New Command** and set the command to
+   `/writemacs`. Socket Mode delivers it, so leave the Request URL empty. This is optional —
+   skip it if you do not want the export command.
+6. Click **Install to Workspace**, then copy the **Bot User OAuth Token** (starts with
    `xoxb-`) into `SLACK_BOT_TOKEN`.
-6. Invite the bot to your channel with `/invite @YourAppName`, then copy the channel ID from
+7. Invite the bot to your channel with `/invite @YourAppName`, then copy the channel ID from
    the channel's **About** pane into `SLACK_CHANNEL_ID`.
 
 **Important:** set `REMEMBER_NEW_DEVICES=false`. With it enabled, a device is remembered
@@ -243,6 +247,35 @@ double-pressed.
 
 **Note:** this only suppresses *notifications*. It does not grant or block network access on
 the UniFi side.
+
+#### Exporting the known devices
+
+Running `/writemacs` in Slack writes the known MAC addresses to `MACS_EXPORT_FILE`
+(default `/data/known_macs.txt`), replacing whatever was there. The reply tells you how many
+were written and is visible only to you.
+
+The output uses the same format as [`KNOWN_MACS_FILE`](#general-settings), so an export can be
+fed straight back in — useful for backing up the database, or for moving your device list to
+another instance:
+
+```
+# Known MAC addresses exported by UniFiClientAlerts
+# 2026-07-30T09:14:22Z — 3 entries
+11:22:33:44:55:66
+aa:bb:cc:dd:ee:ff
+f0:9f:c2:11:22:33
+```
+
+Only **permanent** entries are exported. Temporary allows are deliberately left out, because
+the import format has no notion of expiry and they would come back as permanent — a "quiet for
+6h" decision silently becoming forever. The reply tells you how many were skipped.
+
+The file is written to a temporary file first and then renamed into place, so an interrupted
+export cannot leave a truncated list behind.
+
+Pointing `MACS_EXPORT_FILE` at your `KNOWN_MACS_FILE` makes the round trip automatic, but the
+export **overwrites** the file, so any comments or device names you keep in it are lost. The
+app logs a warning at startup if the two paths match. Keeping them separate is recommended.
 
 ### Gotify
 1. Set up a Gotify server (self-hosted).
@@ -316,6 +349,8 @@ Used when `NOTIFICATION_SERVICE=SlackInteractive`. See [setup](#slack-interactiv
 * `SLACK_CHANNEL_ID`: **(Required)** Channel to post alerts to, e.g. `C0123456789`. The bot must be a member.
 * `SLACK_ALLOWED_USERS`: **(Optional but recommended)** Comma-separated Slack user IDs permitted to press the buttons. If unset, anyone who can see the alert may allow a device.
 * `SLACK_ALLOW_DURATIONS`: **(Optional)** Comma-separated temporary-allow options, using the same format as `REMOVE_DELAY` (`30s`, `6h`, `7d`, `2w`, or raw seconds). Capped at 4 so the permanent button still fits within Slack's five-element limit. (Default: `1h,6h,24h`)
+* `SLACK_EXPORT_COMMAND`: **(Optional)** Slash command that writes the known MACs to disk. A leading `/` is added if you omit it. Must match the command you registered in the Slack app. (Default: `/writemacs`)
+* `MACS_EXPORT_FILE`: **(Optional)** Where the export command writes. The file is overwritten each time. (Default: `/data/known_macs.txt`)
 
 ### Gotify Settings
 * `GOTIFY_URL`: **(Required if using Gotify)** Gotify server URL (e.g., `http://gotify.example.com`).

@@ -178,6 +178,43 @@ func (d *Database) AllowMac(mac string, until *time.Time) error {
 	return err
 }
 
+// PermanentMacs returns the permanently allowed MACs in sorted order, plus a
+// count of the live temporary allows it skipped.
+//
+// Temporary allows are deliberately excluded: the export is written in the
+// KNOWN_MACS_FILE format, so anything included would be read back as permanent
+// on the next start, quietly promoting a "quiet for 6h" decision into forever.
+func (d *Database) PermanentMacs() (macs []string, skippedTemporary int, err error) {
+	rows, err := d.db.Query(`
+		SELECT mac_address, expires_at FROM known_macs ORDER BY mac_address`)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	now := time.Now().Unix()
+	for rows.Next() {
+		var (
+			mac       string
+			expiresAt sql.NullInt64
+		)
+		if err := rows.Scan(&mac, &expiresAt); err != nil {
+			return nil, 0, err
+		}
+		switch {
+		case !expiresAt.Valid:
+			macs = append(macs, mac)
+		case expiresAt.Int64 > now:
+			skippedTemporary++
+		}
+		// Lapsed entries are neither exported nor counted; PurgeExpired reaps them.
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	return macs, skippedTemporary, nil
+}
+
 // PurgeExpired deletes lapsed temporary allows and returns the MACs removed,
 // so the caller can drop them from its in-memory known set.
 func (d *Database) PurgeExpired() ([]string, error) {

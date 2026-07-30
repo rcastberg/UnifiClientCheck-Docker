@@ -55,6 +55,9 @@ type Config struct {
 	// Durations are the temporary-allow options offered, as parsed seconds
 	// paired with the label to show on the button.
 	Durations []Duration
+	// ExportCommand is the slash command that triggers a MAC export,
+	// e.g. "/writemacs".
+	ExportCommand string
 }
 
 // Duration is one temporary-allow button.
@@ -69,6 +72,13 @@ type Decision struct {
 	MAC   string
 	Until *time.Time
 	User  string
+}
+
+// ExportRequest is a request to write the known MACs to disk, produced by the
+// export slash command. ResponseURL is where the outcome should be reported.
+type ExportRequest struct {
+	User        string
+	ResponseURL string
 }
 
 // Client posts interactive alerts and listens for the resulting button presses.
@@ -137,11 +147,12 @@ func (c *Client) alertBlocks(identifier, text string) []map[string]any {
 }
 
 // Listen maintains the Socket Mode connection, emitting a Decision for each
-// accepted button press. It returns only when ctx is cancelled; connection
-// failures are logged and retried.
-func (c *Client) Listen(ctx context.Context, decisions chan<- Decision) {
+// accepted button press and an ExportRequest for each accepted export command.
+// It returns only when ctx is cancelled; connection failures are logged and
+// retried.
+func (c *Client) Listen(ctx context.Context, decisions chan<- Decision, exports chan<- ExportRequest) {
 	for {
-		if err := c.listenOnce(ctx, decisions); err != nil && ctx.Err() == nil {
+		if err := c.listenOnce(ctx, decisions, exports); err != nil && ctx.Err() == nil {
 			log.Printf("Slack Socket Mode connection ended: %v; reconnecting in %s", err, reconnectDelay)
 		}
 		if ctx.Err() != nil {
@@ -156,7 +167,7 @@ func (c *Client) Listen(ctx context.Context, decisions chan<- Decision) {
 }
 
 // listenOnce opens a single Socket Mode connection and pumps it until it fails.
-func (c *Client) listenOnce(ctx context.Context, decisions chan<- Decision) error {
+func (c *Client) listenOnce(ctx context.Context, decisions chan<- Decision, exports chan<- ExportRequest) error {
 	wssURL, err := c.openConnection()
 	if err != nil {
 		return err
@@ -206,11 +217,35 @@ func (c *Client) listenOnce(ctx context.Context, decisions chan<- Decision) erro
 			}
 		}
 
-		if env.Type != "interactive" {
-			continue
+		switch env.Type {
+		case "interactive":
+			c.handleInteraction(env.Payload, decisions)
+		case "slash_commands":
+			c.handleSlashCommand(env.Payload, exports)
 		}
-		c.handleInteraction(env.Payload, decisions)
 	}
+}
+
+// handleSlashCommand validates the export command and forwards it for the main
+// loop to carry out, since that goroutine owns the database and the known set.
+func (c *Client) handleSlashCommand(payload interactionPayload, exports chan<- ExportRequest) {
+	if !strings.EqualFold(payload.Command, c.cfg.ExportCommand) {
+		log.Printf("Ignoring unknown slash command %q.", payload.Command)
+		return
+	}
+
+	user := payload.UserName
+	if user == "" {
+		user = payload.UserID
+	}
+
+	if !c.userAllowed(payload.UserID) {
+		log.Printf("Ignoring %s from unauthorised user %s (%s).", payload.Command, user, payload.UserID)
+		c.Reply(payload.ResponseURL, ":no_entry: You are not permitted to export the known-device list.")
+		return
+	}
+
+	exports <- ExportRequest{User: user, ResponseURL: payload.ResponseURL}
 }
 
 // openConnection exchanges the app-level token for a single-use WebSocket URL.
@@ -317,18 +352,30 @@ func (c *Client) durationFor(label string) (int64, bool) {
 // respond replaces the original alert with the outcome, so the buttons cannot
 // be pressed twice and the channel records who decided what.
 func (c *Client) respond(responseURL, text string) {
-	if responseURL == "" {
-		return
-	}
-	payload := map[string]any{
+	c.sendResponse(responseURL, map[string]any{
 		"replace_original": true,
 		"text":             text,
 		"blocks": []map[string]any{
 			{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": text}},
 		},
+	})
+}
+
+// Reply answers a slash command privately, visible only to the person who ran
+// it. There is no original message to replace in that case.
+func (c *Client) Reply(responseURL, text string) {
+	c.sendResponse(responseURL, map[string]any{
+		"response_type": "ephemeral",
+		"text":          text,
+	})
+}
+
+func (c *Client) sendResponse(responseURL string, payload map[string]any) {
+	if responseURL == "" {
+		return
 	}
 	if err := c.post(responseURL, "", payload, nil); err != nil {
-		log.Printf("Failed to update Slack message: %v", err)
+		log.Printf("Failed to send Slack response: %v", err)
 	}
 }
 
@@ -381,7 +428,10 @@ type envelope struct {
 	Payload    interactionPayload `json:"payload"`
 }
 
-// interactionPayload is the subset of Slack's block_actions payload we use.
+// interactionPayload covers the subset of fields we use from both payload
+// shapes Slack delivers: block_actions (nested User, Actions) and
+// slash_commands (flat UserID, UserName, Command). The two sets do not
+// collide, so one struct decodes either without ambiguity.
 type interactionPayload struct {
 	Type string `json:"type"`
 	User struct {
@@ -393,4 +443,9 @@ type interactionPayload struct {
 		ActionID string `json:"action_id"`
 		Value    string `json:"value"`
 	} `json:"actions"`
+
+	// slash_commands only
+	Command  string `json:"command"`
+	UserID   string `json:"user_id"`
+	UserName string `json:"user_name"`
 }

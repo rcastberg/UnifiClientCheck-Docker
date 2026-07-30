@@ -1,11 +1,14 @@
 package config
 
 import (
+	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Config struct {
@@ -27,6 +30,12 @@ type Config struct {
 	SlackChannelID    string
 	SlackAllowedUsers []string
 	SlackDurations    []AllowDuration
+	SlackExportCmd    string
+
+	// KnownMacsFile is the path KNOWN_MACS_FILE was read from, kept so the
+	// export can warn when it would overwrite its own input.
+	KnownMacsFile  string
+	MacsExportFile string
 }
 
 // AllowDuration is one temporary-allow option offered on an interactive alert.
@@ -53,6 +62,7 @@ func Load() Config {
 	}
 
 	if v := os.Getenv("KNOWN_MACS_FILE"); v != "" {
+		cfg.KnownMacsFile = v
 		cfg.KnownMacs = append(cfg.KnownMacs, loadMacsFromFile(v)...)
 	}
 
@@ -96,6 +106,19 @@ func Load() Config {
 	cfg.SlackChannelID = os.Getenv("SLACK_CHANNEL_ID")
 	cfg.SlackAllowedUsers = splitList(os.Getenv("SLACK_ALLOWED_USERS"))
 	cfg.SlackDurations = parseAllowDurations(os.Getenv("SLACK_ALLOW_DURATIONS"))
+
+	cfg.SlackExportCmd = "/writemacs"
+	if v := strings.TrimSpace(os.Getenv("SLACK_EXPORT_COMMAND")); v != "" {
+		if !strings.HasPrefix(v, "/") {
+			v = "/" + v
+		}
+		cfg.SlackExportCmd = v
+	}
+
+	cfg.MacsExportFile = "/data/known_macs.txt"
+	if v := strings.TrimSpace(os.Getenv("MACS_EXPORT_FILE")); v != "" {
+		cfg.MacsExportFile = v
+	}
 
 	return cfg
 }
@@ -162,6 +185,50 @@ func loadMacsFromFile(path string) []string {
 
 	log.Printf("Loaded %d MAC addresses from %s", len(macs), path)
 	return macs
+}
+
+// WriteMacsFile writes macs to path in the format loadMacsFromFile reads, so an
+// export can be fed straight back in via KNOWN_MACS_FILE. Any existing file is
+// replaced.
+//
+// The write goes to a temporary file in the same directory and is then renamed
+// over the target, so an interrupted run cannot leave a half-written list in
+// place of a good one.
+func WriteMacsFile(path string, macs []string) error {
+	var buf strings.Builder
+	fmt.Fprintf(&buf, "# Known MAC addresses exported by UniFiClientAlerts\n")
+	fmt.Fprintf(&buf, "# %s — %d entries\n", time.Now().Format(time.RFC3339), len(macs))
+	for _, mac := range macs {
+		buf.WriteString(mac)
+		buf.WriteByte('\n')
+	}
+
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0750); err != nil {
+		return fmt.Errorf("failed to create directory for %s: %w", path, err)
+	}
+
+	tmp, err := os.CreateTemp(dir, ".macs-*.tmp")
+	if err != nil {
+		return fmt.Errorf("failed to create temporary file in %s: %w", dir, err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op once the rename below succeeds
+
+	if _, err := tmp.WriteString(buf.String()); err != nil {
+		tmp.Close()
+		return fmt.Errorf("failed to write %s: %w", tmpName, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("failed to close %s: %w", tmpName, err)
+	}
+	if err := os.Chmod(tmpName, 0640); err != nil {
+		return fmt.Errorf("failed to set permissions on %s: %w", tmpName, err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("failed to replace %s: %w", path, err)
+	}
+	return nil
 }
 
 func parseBool(s string, defaultVal bool) bool {
