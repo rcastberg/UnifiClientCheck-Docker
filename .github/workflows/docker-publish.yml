@@ -28,10 +28,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Emulation for building the non-native architectures
+      # Emulation for building the non-native architectures. Only needed when
+      # the platforms list below includes something other than linux/amd64;
+      # the runner is amd64, so nothing is emulated as things stand.
       # https://github.com/docker/setup-qemu-action
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+      # - name: Set up QEMU
+      #   uses: docker/setup-qemu-action@v3
 
       # Set up BuildKit Docker container builder to be able to build
       # multi-platform images and export cache
@@ -77,7 +79,10 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          # amd64 only. To publish for arm again, restore the full list below
+          # and uncomment the QEMU step above, which the arm builds need.
+          platforms: linux/amd64
+          # platforms: linux/amd64,linux/arm64,linux/arm/v7
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
