@@ -108,14 +108,16 @@ func applyDecision(d slack.Decision, db *database.Database, knownMacs map[string
 // With the "fresh" argument the database is emptied first, making the file the
 // sole source of truth. That discards every allow made from the buttons, so it
 // is deliberately opt-in rather than the default.
-func reloadKnownMacs(req slack.Command, cfg config.Config, db *database.Database, knownMacs *map[string]struct{}, sc *slack.Client) {
+//
+// Returns true when the known set was rebuilt, so the caller can force a check.
+func reloadKnownMacs(req slack.Command, cfg config.Config, db *database.Database, knownMacs *map[string]struct{}, sc *slack.Client) bool {
 	fresh := strings.EqualFold(req.Arg, "fresh")
 	if req.Arg != "" && !fresh {
 		sc.Reply(req.ResponseURL, fmt.Sprintf(
 			"Unknown option `%s`. Use `%s` to reload from the file and the database, "+
 				"or `%s fresh` to discard stored allows and use the file alone.",
 			req.Arg, cfg.SlackReloadCmd, cfg.SlackReloadCmd))
-		return
+		return false
 	}
 
 	var discarded int64
@@ -124,7 +126,7 @@ func reloadKnownMacs(req slack.Command, cfg config.Config, db *database.Database
 		if err != nil {
 			log.Printf("Fresh reload requested by %s failed: %v", req.User, err)
 			sc.Reply(req.ResponseURL, fmt.Sprintf(":x: Could not clear stored allows: %v", err))
-			return
+			return false
 		}
 		discarded = n
 	}
@@ -133,7 +135,7 @@ func reloadKnownMacs(req slack.Command, cfg config.Config, db *database.Database
 	if err != nil {
 		log.Printf("Reload requested by %s failed: %v", req.User, err)
 		sc.Reply(req.ResponseURL, fmt.Sprintf(":x: Could not reload the device list: %v", err))
-		return
+		return false
 	}
 
 	rebuilt := make(map[string]struct{}, len(list))
@@ -147,15 +149,16 @@ func reloadKnownMacs(req slack.Command, cfg config.Config, db *database.Database
 		log.Printf("Fresh reload by %s: discarded %d stored allow(s); %d known (was %d).",
 			req.User, discarded, len(rebuilt), before)
 		sc.Reply(req.ResponseURL, fmt.Sprintf(
-			":broom: Rebuilt from `%s` alone: %d device(s) known (was %d).\nDiscarded %d stored allow(s).",
+			":broom: Rebuilt from `%s` alone: %d device(s) known (was %d).\nDiscarded %d stored allow(s). Re-checking now.",
 			cfg.KnownMacsFile, len(rebuilt), before, discarded))
-		return
+		return true
 	}
 
 	log.Printf("Reloaded known devices: %d known (was %d), requested by %s.", len(rebuilt), before, req.User)
 	sc.Reply(req.ResponseURL, fmt.Sprintf(
-		":arrows_counterclockwise: Reloaded from `%s` and the database: %d device(s) known (was %d).",
+		":arrows_counterclockwise: Reloaded from `%s` and the database: %d device(s) known (was %d). Re-checking now.",
 		cfg.KnownMacsFile, len(rebuilt), before))
+	return true
 }
 
 // exportMacs writes the permanently known MACs to disk and reports the outcome
@@ -627,6 +630,13 @@ func main() {
 	// commands carries slash-command requests from the same listener.
 	commands := make(chan slack.Command, 4)
 
+	// recheckCh forces a check straight after a reload. Without it a reload that
+	// drops devices from the known set would not surface them until the next
+	// WebSocket event or fallback poll, which can be FALLBACK_INTERVAL away.
+	// It skips the WebSocket delay and IP-wait that the trigger path performs,
+	// since the clients are already registered.
+	recheckCh := make(chan struct{}, 1)
+
 	// expirySweep drops temporary allows once they lapse, so the device alerts
 	// again. Only needed for the interactive service.
 	var expiryCh <-chan time.Time
@@ -773,7 +783,15 @@ func main() {
 			case slack.CommandExport:
 				exportMacs(cmd, cfg, db, sc)
 			case slack.CommandReload:
-				reloadKnownMacs(cmd, cfg, db, &knownMacs, sc)
+				if reloadKnownMacs(cmd, cfg, db, &knownMacs, sc) {
+					// Re-evaluate now: a reload can drop devices from the known
+					// set, and those should alert immediately rather than
+					// whenever the next event or poll happens to arrive.
+					select {
+					case recheckCh <- struct{}{}:
+					default: // one already queued, which is enough
+					}
+				}
 			}
 			continue
 		case <-expiryCh:
@@ -787,6 +805,9 @@ func main() {
 				log.Printf("Temporary allow for %s has expired; alerts resume.", mac)
 			}
 			continue
+		case <-recheckCh:
+			checkSource = "reload"
+			logVerbose(cfg, "Re-checking current clients after reload.")
 		case <-retryCh:
 			checkSource = "WebSocket retry"
 			log.Printf("WS retry check: device may still be registering.")

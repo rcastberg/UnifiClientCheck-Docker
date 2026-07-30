@@ -254,6 +254,9 @@ the UniFi side.
 `/reload` rebuilds the known set from the file and the database without one, and reports the
 new count.
 
+A reload immediately re-checks the connected clients, so a device it has just forgotten
+alerts straight away rather than waiting for the next WebSocket event or fallback poll.
+
 It is a **full rebuild**, matching exactly what a restart does — so removals take effect, not
 just additions:
 
