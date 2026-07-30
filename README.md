@@ -141,16 +141,20 @@ environment:
 - ✅ **Smart MAC Database** — Remembers known devices (optional SQLite persistence)
 - ✅ **IP Wait Support** — Hold notifications until device gets an IP address; polls with backoff after WS events
 - ✅ **Teleport Support** — Monitors Teleport (VPN) client connections and notifies by default
+- ✅ **Known MACs From File** — Load the known-device list from a file instead of an environment variable ([`KNOWN_MACS_FILE`](#general-settings))
+- ✅ **Randomised MAC Tagging** — Flags locally administered ("private") MAC addresses in alerts
 
 ### Notification Services
 - 📱 **Telegram** — Direct messaging via bot
 - 📲 **Ntfy.sh** — Self-hosted notifications
 - 🔔 **Pushover** — Mobile push notifications
 - 💬 **Slack** — Team notifications
+- 🖱️ **Slack (Interactive)** — Alerts with buttons to allow a device permanently or for a set time ([setup](#slack-interactive))
 - 🚀 **Gotify** — Self-hosted push service
 - 🎮 **Discord** — Webhook-based notifications
 - 🔌 **MQTT** — Publish to broker with JSON payload and online/offline status
 - 🌐 **Webhook** — Custom HTTP endpoint with JSON payload and optional Bearer auth
+- 🔕 **None** — Logs alerts without sending them, for dry runs
 
 ### Deployment
 - 🐳 **Docker** — Optimized multi-arch image (amd64, arm, arm64)
@@ -186,6 +190,59 @@ See https://github.com/binwiederhier/ntfy/tree/main
 
 ### Slack
 Follow the guide at https://api.slack.com/messaging/webhooks
+
+### Slack (Interactive)
+
+`NOTIFICATION_SERVICE=SlackInteractive` posts each alert with buttons so you can silence a
+device straight from the channel, either permanently or for a set time. This is the answer to
+a device you know will be gone in a few hours — allow it for `6h` and it stops alerting until
+then, after which it alerts again.
+
+It uses **Socket Mode**, meaning the container dials out to Slack over a WebSocket. Nothing
+listens on an inbound port, so no port forwarding, reverse proxy or TLS certificate is needed
+and it works behind NAT.
+
+**Creating the app:**
+
+1. Go to https://api.slack.com/apps and click **Create New App > From scratch**.
+2. Under **Socket Mode**, toggle **Enable Socket Mode** on. When prompted, generate an
+   app-level token with the `connections:write` scope. Copy it (it starts with `xapp-`) into
+   `SLACK_APP_TOKEN`.
+3. Under **OAuth & Permissions**, add the `chat:write` bot token scope.
+4. Under **Interactivity & Shortcuts**, toggle **Interactivity** on. Socket Mode delivers the
+   events, so leave the Request URL empty.
+5. Click **Install to Workspace**, then copy the **Bot User OAuth Token** (starts with
+   `xoxb-`) into `SLACK_BOT_TOKEN`.
+6. Invite the bot to your channel with `/invite @YourAppName`, then copy the channel ID from
+   the channel's **About** pane into `SLACK_CHANNEL_ID`.
+
+**Important:** set `REMEMBER_NEW_DEVICES=false`. With it enabled, a device is remembered
+permanently the moment it is first alerted, so the buttons have nothing left to decide. The
+app logs a warning at startup if you leave it on.
+
+**Restrict who can act.** `SLACK_ALLOWED_USERS` limits the buttons to specific Slack user IDs.
+If it is unset, anyone who can see the message can allow a device onto your known list without
+alerting you. Find a user ID under their profile's **More** menu > **Copy member ID**.
+
+```yaml
+NOTIFICATION_SERVICE: SlackInteractive
+SLACK_BOT_TOKEN: "xoxb-..."
+SLACK_APP_TOKEN: "xapp-..."
+SLACK_CHANNEL_ID: "C0123456789"
+SLACK_ALLOWED_USERS: "U0123456789"
+SLACK_ALLOW_DURATIONS: "1h,6h,24h"
+REMEMBER_NEW_DEVICES: "false"
+```
+
+**What the buttons do:** allowing a device writes it to the known-MAC database. A temporary
+allow also stores an expiry; a background sweep removes it once it lapses, so the device
+alerts again on its next appearance. A temporary allow is not affected by `REMOVE_OLD_DEVICES`
+while it is live — "quiet until 18:00" means quiet whether or not the device stays connected.
+Once a button is pressed the message is replaced with who decided what, so it cannot be
+double-pressed.
+
+**Note:** this only suppresses *notifications*. It does not grant or block network access on
+the UniFi side.
 
 ### Gotify
 1. Set up a Gotify server (self-hosted).
@@ -229,8 +286,9 @@ Set these variables for proper configuration:
 * `DATABASE_PATH`: **(Optional)** Path to the SQLite database file. (Default: `/data/knownMacs.db`)
 
 ### Notification Service Selection
-* `NOTIFICATION_SERVICE`: **(Optional)** Set to `Telegram`, `Ntfy`, `Pushover`, `Slack`, `Gotify`, `Discord`, `MQTT`, `Webhook`, or `None`. (Default: `Telegram`)
+* `NOTIFICATION_SERVICE`: **(Optional)** Set to `Telegram`, `Ntfy`, `Pushover`, `Slack`, `SlackInteractive`, `Gotify`, `Discord`, `MQTT`, `Webhook`, or `None`. (Default: `Telegram`)
   * `None` writes each alert to the container log instead of delivering it anywhere, which is useful for dry runs and for seeding the known-device database without spamming yourself.
+  * `SlackInteractive` posts alerts with allow buttons — see [Slack (Interactive)](#slack-interactive).
 
 ### Telegram Settings
 * `TELEGRAM_BOT_TOKEN`: **(Required if using Telegram)** Telegram bot token (example: `12345678:ABCDEFGHIJKLMNOPQRSTUVWXYZ`).
@@ -250,6 +308,14 @@ Set these variables for proper configuration:
 
 ### Slack Settings
 * `SLACK_WEBHOOK_URL`: **(Required if using Slack)** Slack incoming webhook URL.
+
+### Slack (Interactive) Settings
+Used when `NOTIFICATION_SERVICE=SlackInteractive`. See [setup](#slack-interactive).
+* `SLACK_BOT_TOKEN`: **(Required)** Bot User OAuth Token (`xoxb-...`) with the `chat:write` scope.
+* `SLACK_APP_TOKEN`: **(Required)** App-level token (`xapp-...`) with the `connections:write` scope, used for Socket Mode.
+* `SLACK_CHANNEL_ID`: **(Required)** Channel to post alerts to, e.g. `C0123456789`. The bot must be a member.
+* `SLACK_ALLOWED_USERS`: **(Optional but recommended)** Comma-separated Slack user IDs permitted to press the buttons. If unset, anyone who can see the alert may allow a device.
+* `SLACK_ALLOW_DURATIONS`: **(Optional)** Comma-separated temporary-allow options, using the same format as `REMOVE_DELAY` (`30s`, `6h`, `7d`, `2w`, or raw seconds). Capped at 4 so the permanent button still fits within Slack's five-element limit. (Default: `1h,6h,24h`)
 
 ### Gotify Settings
 * `GOTIFY_URL`: **(Required if using Gotify)** Gotify server URL (e.g., `http://gotify.example.com`).

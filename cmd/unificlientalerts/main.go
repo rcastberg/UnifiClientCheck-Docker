@@ -6,12 +6,14 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/zsamuels28/unificlientalerts/internal/config"
 	"github.com/zsamuels28/unificlientalerts/internal/database"
 	"github.com/zsamuels28/unificlientalerts/internal/notifier"
+	"github.com/zsamuels28/unificlientalerts/internal/slack"
 	"github.com/zsamuels28/unificlientalerts/internal/unifi"
 )
 
@@ -55,8 +57,14 @@ func formatMessage(client *unifi.NetworkClient, teleport bool) string {
 }
 
 // sendAlert dispatches a notification for a client via the configured service.
-func sendAlert(client *unifi.NetworkClient, cfg config.Config, notif *notifier.Notifier) {
+// sc is non-nil only when NOTIFICATION_SERVICE=SlackInteractive.
+func sendAlert(client *unifi.NetworkClient, cfg config.Config, notif *notifier.Notifier, sc *slack.Client) {
 	switch cfg.NotificationService {
+	case "SlackInteractive":
+		message := formatMessage(client, client.Type == "TELEPORT")
+		if err := sc.PostAlert(client, message); err != nil {
+			log.Printf("Failed to send interactive Slack notification: %v", err)
+		}
 	case "MQTT":
 		if err := notif.SendMQTTNotification(client); err != nil {
 			log.Printf("Failed to send MQTT notification: %v", err)
@@ -71,6 +79,23 @@ func sendAlert(client *unifi.NetworkClient, cfg config.Config, notif *notifier.N
 			log.Printf("Failed to send notification: %v", err)
 		}
 	}
+}
+
+// applyDecision records an allow chosen from a Slack button. It runs on the main
+// loop goroutine, which is the only writer of knownMacs.
+func applyDecision(d slack.Decision, db *database.Database, knownMacs map[string]struct{}) {
+	if err := db.AllowMac(d.MAC, d.Until); err != nil {
+		log.Printf("Failed to store allow for %s: %v", d.MAC, err)
+		return
+	}
+	knownMacs[d.MAC] = struct{}{}
+
+	if d.Until == nil {
+		log.Printf("%s allowed permanently by %s.", d.MAC, d.User)
+		return
+	}
+	remaining := config.HumanDuration(int64(time.Until(*d.Until).Seconds()))
+	log.Printf("%s allowed for %s by %s.", d.MAC, remaining, d.User)
 }
 
 // recordDevice stores the identifier in the database and marks it known in-memory.
@@ -93,6 +118,7 @@ func runCheck(
 	notif *notifier.Notifier,
 	knownMacs map[string]struct{},
 	pendingMacs map[string]time.Time,
+	sc *slack.Client,
 	source string,
 	quiet bool,
 ) (clients []unifi.NetworkClient, newDeviceFound bool) {
@@ -149,7 +175,7 @@ func runCheck(
 		}
 
 		if cfg.AlwaysNotify || isNew {
-			sendAlert(client, cfg, notif)
+			sendAlert(client, cfg, notif, sc)
 
 			if isNew {
 				recordDevice(identifier, cfg, db, knownMacs)
@@ -335,6 +361,13 @@ func validateConfig(cfg config.Config) {
 		required("PUSHOVER_USER", os.Getenv("PUSHOVER_USER"), "required for Pushover notifications")
 	case "Slack":
 		required("SLACK_WEBHOOK_URL", os.Getenv("SLACK_WEBHOOK_URL"), "required for Slack notifications")
+	case "SlackInteractive":
+		required("SLACK_BOT_TOKEN", cfg.SlackBotToken, "xoxb- token, required to post interactive Slack alerts")
+		required("SLACK_APP_TOKEN", cfg.SlackAppToken, "xapp- app-level token with connections:write, required for Socket Mode")
+		required("SLACK_CHANNEL_ID", cfg.SlackChannelID, "channel to post interactive Slack alerts to, e.g. C0123456789")
+		if len(cfg.SlackDurations) == 0 {
+			log.Fatalf("SLACK_ALLOW_DURATIONS contained no valid durations; use values such as 1h,6h,24h")
+		}
 	case "Gotify":
 		required("GOTIFY_URL", os.Getenv("GOTIFY_URL"), "required for Gotify notifications")
 		required("GOTIFY_TOKEN", os.Getenv("GOTIFY_TOKEN"), "required for Gotify notifications")
@@ -351,9 +384,9 @@ func validateConfig(cfg config.Config) {
 func main() {
 	cfg := config.Load()
 
-	validServices := map[string]bool{"Telegram": true, "Ntfy": true, "Pushover": true, "Slack": true, "Gotify": true, "Discord": true, "MQTT": true, "Webhook": true}
+	validServices := map[string]bool{"Telegram": true, "Ntfy": true, "Pushover": true, "Slack": true, "SlackInteractive": true, "Gotify": true, "Discord": true, "MQTT": true, "Webhook": true, "None": true}
 	if !validServices[cfg.NotificationService] {
-		log.Fatalf("Error: Invalid notification service %q. Must be Telegram, Ntfy, Pushover, Slack, Gotify, Discord, MQTT, or Webhook.", cfg.NotificationService)
+		log.Fatalf("Error: Invalid notification service %q. Must be Telegram, Ntfy, Pushover, Slack, SlackInteractive, Gotify, Discord, MQTT, Webhook, or None.", cfg.NotificationService)
 	}
 
 	validateConfig(cfg)
@@ -420,6 +453,36 @@ func main() {
 		}
 	}
 
+	// sc is nil unless the interactive Slack service is selected; sendAlert only
+	// dereferences it in that case.
+	var sc *slack.Client
+	if cfg.NotificationService == "SlackInteractive" {
+		labels := make([]string, 0, len(cfg.SlackDurations))
+		durations := make([]slack.Duration, 0, len(cfg.SlackDurations))
+		for _, d := range cfg.SlackDurations {
+			durations = append(durations, slack.Duration{Label: d.Label, Seconds: d.Seconds})
+			labels = append(labels, d.Label)
+		}
+
+		sc = slack.New(slack.Config{
+			BotToken:     cfg.SlackBotToken,
+			AppToken:     cfg.SlackAppToken,
+			ChannelID:    cfg.SlackChannelID,
+			AllowedUsers: cfg.SlackAllowedUsers,
+			Durations:    durations,
+		})
+
+		log.Printf("Interactive Slack enabled: temporary allow options %s", strings.Join(labels, ", "))
+		if len(cfg.SlackAllowedUsers) == 0 {
+			log.Printf("Warning: SLACK_ALLOWED_USERS is unset; anyone who can see the alert may allow a device.")
+		}
+		// With REMEMBER_NEW_DEVICES on, a device is stored permanently the moment
+		// it is alerted, so the buttons would have nothing left to decide.
+		if cfg.RememberNewDevices {
+			log.Printf("Warning: REMEMBER_NEW_DEVICES is enabled, so new devices are remembered permanently on first alert and the allow buttons will have no effect. Set REMEMBER_NEW_DEVICES=false to let the buttons decide.")
+		}
+	}
+
 	uc := unifi.NewUnifiClient(
 		os.Getenv("UNIFI_CONTROLLER_USER"),
 		os.Getenv("UNIFI_CONTROLLER_PASSWORD"),
@@ -457,6 +520,23 @@ func main() {
 	// nothing. Unlike trigger, it skips waitForDeviceIP and goes straight to runCheck,
 	// keeping the main loop unblocked during the wait.
 	retryCh := make(chan struct{}, 1)
+
+	// decisions carries allow instructions from the Slack listener goroutine.
+	// knownMacs is a plain map owned by this loop, so it must never be written
+	// from the listener; routing decisions through a channel keeps the write on
+	// this goroutine and avoids a data race.
+	decisions := make(chan slack.Decision, 8)
+
+	// expirySweep drops temporary allows once they lapse, so the device alerts
+	// again. Only needed for the interactive service.
+	var expiryCh <-chan time.Time
+	if sc != nil {
+		go sc.Listen(ctx, decisions)
+
+		sweep := time.NewTicker(time.Minute)
+		defer sweep.Stop()
+		expiryCh = sweep.C
+	}
 
 	// teleportCh carries Teleport client data directly from the WS stream.
 	// Buffered so the WS goroutine never blocks; the main loop deduplicates via knownMacs.
@@ -497,7 +577,7 @@ func main() {
 			return
 		}
 		log.Printf("New device %s detected (source: Teleport); sending notification.", identifier)
-		sendAlert(&client, cfg, notif)
+		sendAlert(&client, cfg, notif, sc)
 		recordDevice(identifier, cfg, db, knownMacs)
 	}
 
@@ -556,7 +636,7 @@ func main() {
 			}
 
 			wsOnFound := func(client *unifi.NetworkClient) {
-				sendAlert(client, cfg, notif)
+				sendAlert(client, cfg, notif, sc)
 				recordDevice(client.Identifier(true), cfg, db, knownMacs)
 			}
 			if hasUnknownDevices {
@@ -577,13 +657,27 @@ func main() {
 				// Set placeholder values for unavailable IP/network
 				client.IP = "IP Unavailable"
 				client.Network = "Device not registered to network yet"
-				sendAlert(client, cfg, notif)
+				sendAlert(client, cfg, notif, sc)
 				recordDevice(identifier, cfg, db, knownMacs)
 			}
 			checkSource = "WebSocket"
 			wsTriggered = true
 		case client := <-teleportCh:
 			handleTeleport(client)
+			continue
+		case d := <-decisions:
+			applyDecision(d, db, knownMacs)
+			continue
+		case <-expiryCh:
+			expired, err := db.PurgeExpired()
+			if err != nil {
+				log.Printf("Failed to purge expired allows: %v", err)
+				continue
+			}
+			for _, mac := range expired {
+				delete(knownMacs, mac)
+				log.Printf("Temporary allow for %s has expired; alerts resume.", mac)
+			}
 			continue
 		case <-retryCh:
 			checkSource = "WebSocket retry"
@@ -605,7 +699,7 @@ func main() {
 			continue
 		}
 
-		clients, found := runCheck(uc, cfg, db, notif, knownMacs, pendingMacs, checkSource, wsDeviceFound)
+		clients, found := runCheck(uc, cfg, db, notif, knownMacs, pendingMacs, sc, checkSource, wsDeviceFound)
 
 		// If a WS event triggered this check but nothing was found yet, the device
 		// may still be registering. Schedule a single non-blocking re-check via

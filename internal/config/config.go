@@ -20,6 +20,19 @@ type Config struct {
 	WSEventDelay        int  // seconds to wait after a WS event before querying the API
 	FallbackInterval    int  // seconds for fallback checks; -1 = disabled, default = 60
 	Verbose             bool // if true, log diagnostic/polling details; default = false
+
+	// Interactive Slack (NOTIFICATION_SERVICE=SlackInteractive)
+	SlackBotToken     string
+	SlackAppToken     string
+	SlackChannelID    string
+	SlackAllowedUsers []string
+	SlackDurations    []AllowDuration
+}
+
+// AllowDuration is one temporary-allow option offered on an interactive alert.
+type AllowDuration struct {
+	Label   string
+	Seconds int64
 }
 
 func Load() Config {
@@ -78,7 +91,52 @@ func Load() Config {
 
 	cfg.Verbose = parseBool(os.Getenv("VERBOSE"), false)
 
+	cfg.SlackBotToken = os.Getenv("SLACK_BOT_TOKEN")
+	cfg.SlackAppToken = os.Getenv("SLACK_APP_TOKEN")
+	cfg.SlackChannelID = os.Getenv("SLACK_CHANNEL_ID")
+	cfg.SlackAllowedUsers = splitList(os.Getenv("SLACK_ALLOWED_USERS"))
+	cfg.SlackDurations = parseAllowDurations(os.Getenv("SLACK_ALLOW_DURATIONS"))
+
 	return cfg
+}
+
+// splitList parses a comma-separated environment value, dropping blanks.
+func splitList(v string) []string {
+	var out []string
+	for _, item := range strings.Split(v, ",") {
+		if trimmed := strings.TrimSpace(item); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+// defaultAllowDurations is used when SLACK_ALLOW_DURATIONS is unset.
+const defaultAllowDurations = "1h,6h,24h"
+
+// parseAllowDurations builds the temporary-allow buttons from a comma-separated
+// list such as "1h,6h,24h". Unparseable entries are warned about and skipped;
+// Slack rejects a message with more than five buttons in one block, so the list
+// is capped at four to leave room for the permanent option.
+func parseAllowDurations(v string) []AllowDuration {
+	if strings.TrimSpace(v) == "" {
+		v = defaultAllowDurations
+	}
+
+	var out []AllowDuration
+	for _, label := range splitList(v) {
+		seconds, ok := parseDuration(label)
+		if !ok || seconds <= 0 {
+			log.Printf("Warning: SLACK_ALLOW_DURATIONS entry %q is not a valid duration, ignoring", label)
+			continue
+		}
+		out = append(out, AllowDuration{Label: label, Seconds: seconds})
+		if len(out) == 4 {
+			log.Printf("Warning: SLACK_ALLOW_DURATIONS is capped at 4 entries; ignoring the rest")
+			break
+		}
+	}
+	return out
 }
 
 // macPattern matches a MAC address in either colon- or hyphen-separated form.
