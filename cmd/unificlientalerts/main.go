@@ -99,10 +99,36 @@ func applyDecision(d slack.Decision, db *database.Database, knownMacs map[string
 	log.Printf("%s allowed for %s by %s.", d.MAC, remaining, d.User)
 }
 
+// reloadKnownMacs rebuilds the known set from KNOWN_MACS_FILE and the database,
+// exactly as a restart would, so edits to the file take effect without one.
+//
+// Devices seen earlier in this session that are in neither source are dropped
+// and will alert again, which is the same behaviour as restarting.
+func reloadKnownMacs(req slack.Command, cfg config.Config, db *database.Database, knownMacs *map[string]struct{}, sc *slack.Client) {
+	list, err := db.LoadKnownMacs(cfg.KnownMacsSeed())
+	if err != nil {
+		log.Printf("Reload requested by %s failed: %v", req.User, err)
+		sc.Reply(req.ResponseURL, fmt.Sprintf(":x: Could not reload the device list: %v", err))
+		return
+	}
+
+	rebuilt := make(map[string]struct{}, len(list))
+	for _, mac := range list {
+		rebuilt[mac] = struct{}{}
+	}
+	before := len(*knownMacs)
+	*knownMacs = rebuilt
+
+	log.Printf("Reloaded known devices: %d known (was %d), requested by %s.", len(rebuilt), before, req.User)
+	sc.Reply(req.ResponseURL, fmt.Sprintf(
+		":arrows_counterclockwise: Reloaded from `%s` and the database: %d device(s) known (was %d).",
+		cfg.KnownMacsFile, len(rebuilt), before))
+}
+
 // exportMacs writes the permanently known MACs to disk and reports the outcome
 // back to the person who ran the command. It runs on the main loop goroutine,
 // so it must not block for long; writing a few thousand lines does not.
-func exportMacs(req slack.ExportRequest, cfg config.Config, db *database.Database, sc *slack.Client) {
+func exportMacs(req slack.Command, cfg config.Config, db *database.Database, sc *slack.Client) {
 	macs, skipped, err := db.PermanentMacs()
 	if err != nil {
 		log.Printf("Export requested by %s failed: %v", req.User, err)
@@ -498,10 +524,16 @@ func main() {
 			AllowedUsers:  cfg.SlackAllowedUsers,
 			Durations:     durations,
 			ExportCommand: cfg.SlackExportCmd,
+			ReloadCommand: cfg.SlackReloadCmd,
 		})
 
 		log.Printf("Interactive Slack enabled: temporary allow options %s", strings.Join(labels, ", "))
 		log.Printf("Export command %s writes known MACs to %s", cfg.SlackExportCmd, cfg.MacsExportFile)
+		if cfg.KnownMacsFile != "" {
+			log.Printf("Reload command %s re-reads %s", cfg.SlackReloadCmd, cfg.KnownMacsFile)
+		} else {
+			log.Printf("Reload command %s re-reads the database only (KNOWN_MACS_FILE is unset)", cfg.SlackReloadCmd)
+		}
 		if cfg.KnownMacsFile != "" && filepath.Clean(cfg.KnownMacsFile) == filepath.Clean(cfg.MacsExportFile) {
 			log.Printf("Warning: MACS_EXPORT_FILE is the same path as KNOWN_MACS_FILE; exporting will overwrite any comments or device names in it.")
 		}
@@ -559,14 +591,14 @@ func main() {
 	// this goroutine and avoids a data race.
 	decisions := make(chan slack.Decision, 8)
 
-	// exports carries MAC export requests from the same listener.
-	exports := make(chan slack.ExportRequest, 4)
+	// commands carries slash-command requests from the same listener.
+	commands := make(chan slack.Command, 4)
 
 	// expirySweep drops temporary allows once they lapse, so the device alerts
 	// again. Only needed for the interactive service.
 	var expiryCh <-chan time.Time
 	if sc != nil {
-		go sc.Listen(ctx, decisions, exports)
+		go sc.Listen(ctx, decisions, commands)
 
 		sweep := time.NewTicker(time.Minute)
 		defer sweep.Stop()
@@ -703,8 +735,13 @@ func main() {
 		case d := <-decisions:
 			applyDecision(d, db, knownMacs)
 			continue
-		case req := <-exports:
-			exportMacs(req, cfg, db, sc)
+		case cmd := <-commands:
+			switch cmd.Kind {
+			case slack.CommandExport:
+				exportMacs(cmd, cfg, db, sc)
+			case slack.CommandReload:
+				reloadKnownMacs(cmd, cfg, db, &knownMacs, sc)
+			}
 			continue
 		case <-expiryCh:
 			expired, err := db.PurgeExpired()

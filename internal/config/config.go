@@ -31,9 +31,14 @@ type Config struct {
 	SlackAllowedUsers []string
 	SlackDurations    []AllowDuration
 	SlackExportCmd    string
+	SlackReloadCmd    string
 
-	// KnownMacsFile is the path KNOWN_MACS_FILE was read from, kept so the
-	// export can warn when it would overwrite its own input.
+	// EnvKnownMacs holds only the KNOWN_MACS entries, kept separate from
+	// KnownMacs so a reload can re-read the file without duplicating them.
+	EnvKnownMacs []string
+	// KnownMacsFile is the path KNOWN_MACS_FILE was read from, kept so it can be
+	// re-read on reload and so the export can warn when it would overwrite its
+	// own input.
 	KnownMacsFile  string
 	MacsExportFile string
 }
@@ -53,18 +58,9 @@ func Load() Config {
 		FallbackInterval:    60, // default: fallback every 60 seconds
 	}
 
-	if v := os.Getenv("KNOWN_MACS"); v != "" {
-		for _, mac := range strings.Split(v, ",") {
-			if trimmed := strings.TrimSpace(mac); trimmed != "" {
-				cfg.KnownMacs = append(cfg.KnownMacs, trimmed)
-			}
-		}
-	}
-
-	if v := os.Getenv("KNOWN_MACS_FILE"); v != "" {
-		cfg.KnownMacsFile = v
-		cfg.KnownMacs = append(cfg.KnownMacs, loadMacsFromFile(v)...)
-	}
+	cfg.EnvKnownMacs = splitList(os.Getenv("KNOWN_MACS"))
+	cfg.KnownMacsFile = os.Getenv("KNOWN_MACS_FILE")
+	cfg.KnownMacs = cfg.KnownMacsSeed()
 
 	if v := os.Getenv("NOTIFICATION_SERVICE"); v != "" {
 		cfg.NotificationService = v
@@ -115,12 +111,31 @@ func Load() Config {
 		cfg.SlackExportCmd = v
 	}
 
+	cfg.SlackReloadCmd = "/reload"
+	if v := strings.TrimSpace(os.Getenv("SLACK_RELOAD_COMMAND")); v != "" {
+		if !strings.HasPrefix(v, "/") {
+			v = "/" + v
+		}
+		cfg.SlackReloadCmd = v
+	}
+
 	cfg.MacsExportFile = "/data/known_macs.txt"
 	if v := strings.TrimSpace(os.Getenv("MACS_EXPORT_FILE")); v != "" {
 		cfg.MacsExportFile = v
 	}
 
 	return cfg
+}
+
+// KnownMacsSeed returns the configured known MACs: the KNOWN_MACS entries plus
+// the contents of KNOWN_MACS_FILE, which is re-read on each call so edits to the
+// file are picked up without restarting.
+func (c Config) KnownMacsSeed() []string {
+	seed := append([]string(nil), c.EnvKnownMacs...)
+	if c.KnownMacsFile != "" {
+		seed = append(seed, loadMacsFromFile(c.KnownMacsFile)...)
+	}
+	return seed
 }
 
 // splitList parses a comma-separated environment value, dropping blanks.

@@ -212,9 +212,9 @@ and it works behind NAT.
 3. Under **OAuth & Permissions**, add the `chat:write` bot token scope.
 4. Under **Interactivity & Shortcuts**, toggle **Interactivity** on. Socket Mode delivers the
    events, so leave the Request URL empty.
-5. Under **Slash Commands**, click **Create New Command** and set the command to
-   `/writemacs`. Socket Mode delivers it, so leave the Request URL empty. This is optional —
-   skip it if you do not want the export command.
+5. Under **Slash Commands**, click **Create New Command** and add `/writemacs`, then repeat
+   for `/reload`. Socket Mode delivers them, so leave the Request URL empty. Both are
+   optional — skip either if you do not want it.
 6. Click **Install to Workspace**, then copy the **Bot User OAuth Token** (starts with
    `xoxb-`) into `SLACK_BOT_TOKEN`.
 7. Invite the bot to your channel with `/invite @YourAppName`, then copy the channel ID from
@@ -247,6 +247,26 @@ double-pressed.
 
 **Note:** this only suppresses *notifications*. It does not grant or block network access on
 the UniFi side.
+
+#### Reloading the known devices
+
+`KNOWN_MACS_FILE` is read at startup, so edits to it normally need a restart. Running
+`/reload` rebuilds the known set from the file and the database without one, and reports the
+new count.
+
+It is a **full rebuild**, matching exactly what a restart does — so removals take effect, not
+just additions:
+
+| Change to `macs.txt` | After `/reload` |
+|---|---|
+| MAC added | Silent |
+| MAC removed | Alerts again |
+
+The one thing to be aware of: with `REMEMBER_NEW_DEVICES=false`, a device you have merely
+been alerted about is remembered *in memory only*. A reload discards that, so any device seen
+this session that is in neither the file nor the database will alert again — the same as if
+you had restarted the container. If you want a device to survive both, press **Allow
+permanently** (which writes to the database) or add it to `macs.txt`.
 
 #### Exporting the known devices
 
@@ -350,6 +370,7 @@ Used when `NOTIFICATION_SERVICE=SlackInteractive`. See [setup](#slack-interactiv
 * `SLACK_ALLOWED_USERS`: **(Optional but recommended)** Comma-separated Slack user IDs permitted to press the buttons. If unset, anyone who can see the alert may allow a device.
 * `SLACK_ALLOW_DURATIONS`: **(Optional)** Comma-separated temporary-allow options, using the same format as `REMOVE_DELAY` (`30s`, `6h`, `7d`, `2w`, or raw seconds). Capped at 4 so the permanent button still fits within Slack's five-element limit. (Default: `1h,6h,24h`)
 * `SLACK_EXPORT_COMMAND`: **(Optional)** Slash command that writes the known MACs to disk. A leading `/` is added if you omit it. Must match the command you registered in the Slack app. (Default: `/writemacs`)
+* `SLACK_RELOAD_COMMAND`: **(Optional)** Slash command that re-reads `KNOWN_MACS_FILE` and rebuilds the known set, as a restart would. Must match the command registered in the Slack app. (Default: `/reload`)
 * `MACS_EXPORT_FILE`: **(Optional)** Where the export command writes. The file is overwritten each time. (Default: `/data/known_macs.txt`)
 
 ### Gotify Settings

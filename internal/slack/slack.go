@@ -58,6 +58,9 @@ type Config struct {
 	// ExportCommand is the slash command that triggers a MAC export,
 	// e.g. "/writemacs".
 	ExportCommand string
+	// ReloadCommand is the slash command that rebuilds the known set from
+	// KNOWN_MACS_FILE and the database, e.g. "/reload".
+	ReloadCommand string
 }
 
 // Duration is one temporary-allow button.
@@ -74,9 +77,21 @@ type Decision struct {
 	User  string
 }
 
-// ExportRequest is a request to write the known MACs to disk, produced by the
-// export slash command. ResponseURL is where the outcome should be reported.
-type ExportRequest struct {
+// CommandKind identifies which slash command was invoked.
+type CommandKind int
+
+const (
+	// CommandExport writes the known MACs to disk.
+	CommandExport CommandKind = iota
+	// CommandReload rebuilds the known set from KNOWN_MACS_FILE and the database.
+	CommandReload
+)
+
+// Command is an accepted slash command awaiting execution by the main loop,
+// which owns the database and the known set. ResponseURL is where the outcome
+// should be reported.
+type Command struct {
+	Kind        CommandKind
 	User        string
 	ResponseURL string
 }
@@ -147,12 +162,12 @@ func (c *Client) alertBlocks(identifier, text string) []map[string]any {
 }
 
 // Listen maintains the Socket Mode connection, emitting a Decision for each
-// accepted button press and an ExportRequest for each accepted export command.
-// It returns only when ctx is cancelled; connection failures are logged and
+// accepted button press and a Command for each accepted slash command. It
+// returns only when ctx is cancelled; connection failures are logged and
 // retried.
-func (c *Client) Listen(ctx context.Context, decisions chan<- Decision, exports chan<- ExportRequest) {
+func (c *Client) Listen(ctx context.Context, decisions chan<- Decision, commands chan<- Command) {
 	for {
-		if err := c.listenOnce(ctx, decisions, exports); err != nil && ctx.Err() == nil {
+		if err := c.listenOnce(ctx, decisions, commands); err != nil && ctx.Err() == nil {
 			log.Printf("Slack Socket Mode connection ended: %v; reconnecting in %s", err, reconnectDelay)
 		}
 		if ctx.Err() != nil {
@@ -167,7 +182,7 @@ func (c *Client) Listen(ctx context.Context, decisions chan<- Decision, exports 
 }
 
 // listenOnce opens a single Socket Mode connection and pumps it until it fails.
-func (c *Client) listenOnce(ctx context.Context, decisions chan<- Decision, exports chan<- ExportRequest) error {
+func (c *Client) listenOnce(ctx context.Context, decisions chan<- Decision, commands chan<- Command) error {
 	wssURL, err := c.openConnection()
 	if err != nil {
 		return err
@@ -221,15 +236,21 @@ func (c *Client) listenOnce(ctx context.Context, decisions chan<- Decision, expo
 		case "interactive":
 			c.handleInteraction(env.Payload, decisions)
 		case "slash_commands":
-			c.handleSlashCommand(env.Payload, exports)
+			c.handleSlashCommand(env.Payload, commands)
 		}
 	}
 }
 
-// handleSlashCommand validates the export command and forwards it for the main
-// loop to carry out, since that goroutine owns the database and the known set.
-func (c *Client) handleSlashCommand(payload interactionPayload, exports chan<- ExportRequest) {
-	if !strings.EqualFold(payload.Command, c.cfg.ExportCommand) {
+// handleSlashCommand validates a slash command and forwards it for the main loop
+// to carry out, since that goroutine owns the database and the known set.
+func (c *Client) handleSlashCommand(payload interactionPayload, commands chan<- Command) {
+	var kind CommandKind
+	switch {
+	case strings.EqualFold(payload.Command, c.cfg.ExportCommand):
+		kind = CommandExport
+	case strings.EqualFold(payload.Command, c.cfg.ReloadCommand):
+		kind = CommandReload
+	default:
 		log.Printf("Ignoring unknown slash command %q.", payload.Command)
 		return
 	}
@@ -241,11 +262,11 @@ func (c *Client) handleSlashCommand(payload interactionPayload, exports chan<- E
 
 	if !c.userAllowed(payload.UserID) {
 		log.Printf("Ignoring %s from unauthorised user %s (%s).", payload.Command, user, payload.UserID)
-		c.Reply(payload.ResponseURL, ":no_entry: You are not permitted to export the known-device list.")
+		c.Reply(payload.ResponseURL, ":no_entry: You are not permitted to change the known-device list.")
 		return
 	}
 
-	exports <- ExportRequest{User: user, ResponseURL: payload.ResponseURL}
+	commands <- Command{Kind: kind, User: user, ResponseURL: payload.ResponseURL}
 }
 
 // openConnection exchanges the app-level token for a single-use WebSocket URL.
