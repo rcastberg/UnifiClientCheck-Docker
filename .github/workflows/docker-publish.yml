@@ -56,9 +56,18 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # type=ref is the safety net: the semver patterns silently produce
+          # nothing for a tag like "v2.0" that has no patch component, and a
+          # build with zero tags fails outright with "tag is needed when
+          # pushing to registry". This always yields the literal tag name.
+          #
+          # latest is keyed off the event rather than is_default_branch, which
+          # is false for a release because it builds from a tag ref.
           tags: |
+            type=ref,event=tag
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ github.event_name == 'release' }}
             type=raw,value=latest,enable={{is_default_branch}}
 
       # Build and push Docker image with Buildx (don't push on PR)
